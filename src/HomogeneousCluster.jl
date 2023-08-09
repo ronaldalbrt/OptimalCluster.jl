@@ -29,7 +29,7 @@ module HomogeneousCluster
             end
         end
 
-        return x
+        return x, (sum(u) + sum((d .- u).*x))
     end
 
     # --------------------------------------------------------------
@@ -41,18 +41,21 @@ module HomogeneousCluster
     # m: Number of clusters
     # θ: Smoothing parameter for the step
     # n_steps: Number of steps to perform
+    # upper_bound: Upper bound for the Lagrangian Problem
+    # ε: Hyperparameter for the step size calculation
     # --------------------------------------------------------------
     # Return: The solution found for the Lagragian Dual of the Homogeneous Clustering Problem
     # --------------------------------------------------------------
-    function subgradient_algorithm(initial_u::AbstractVector, d::AbstractMatrix, m::Integer, θ::Real, n_steps::Integer)::Vector
+    function subgradient_algorithm(initial_u::AbstractVector, d::AbstractMatrix, m::Integer, θ::Real, n_steps::Integer, upper_bound::Integer, ε::Real)::Vector
         u = initial_u
 
         prev_subgradient = zeros(size(u))
         for i in 1:n_steps
-            x = langrangian(u, d, m)
-            subgradient = (1 .- sum(x, dims = 2)) + θ .* prev_subgradient
+            x, Z_u = langrangian(u, d, m)
+            constraint_values = (1 .- sum(x, dims = 2))
+            subgradient = constraint_values + θ .* prev_subgradient
 
-            step_size = 1 / i
+            step_size = ε*(upper_bound - Z_u)/(constraint_values'*constraint_values) 
 
             u = u + step_size .* subgradient
 
