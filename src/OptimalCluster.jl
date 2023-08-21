@@ -1,5 +1,6 @@
 module OptimalCluster
 
-greet() = print("Hello World!")
+include("HomogeneousCluster.jl")
+import .HomogeneousCluster
 
-end # module OptimalCluster
+end 
