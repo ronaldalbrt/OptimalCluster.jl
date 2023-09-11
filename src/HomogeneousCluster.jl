@@ -1,21 +1,113 @@
 module HomogeneousCluster
-    using JuMP, Gurobi
+    using JuMP, HiGHS, StatsBase
     # --------------------------------------------------------------
     # Definition of the Data for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
     # Parameters:
     # n_points: Number of data points
-    # n_cluster_candidates: Number of cluster candidates
     # n_clusters: Number of clusters
-    # d: Vector of distances between all data points
+    # d: Matrix of distances between all data points
     # --------------------------------------------------------------
     # Return: A struct containing the data for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
     struct ClusterProblemData
         n_points::Integer
-        n_cluster_candidates::Integer
         n_clusters::Integer
         d::AbstractMatrix
+    end
+
+    # --------------------------------------------------------------
+    # Auxiliary function to build a solution for a set of clusters
+    # --------------------------------------------------------------
+    # Parameters:
+    # clusters: Vector of clusters
+    # data: A struct containing the data for the Homogeneous Clustering Problem
+    # --------------------------------------------------------------
+    # Return: Solution for the Homogeneous Clustering Problem with the predefined clusters
+    # --------------------------------------------------------------
+    function _build_solution_from_clusters(clusters::AbstractVector, data::ClusterProblemData)
+        distance_matrix = data.d
+        n_points = data.n_points
+
+        solution = zeros(n_points, n_points)
+        for i in 1:n_points
+            if i ∉ clusters
+                argmin = Base.argmin([distance_matrix[i, j] for j in clusters])
+                solution[i, clusters[argmin]] = 1
+            else
+                solution[i, i] = 1
+            end
+        end
+
+        return solution
+    end
+
+    function _local_search(clusters::AbstractVector, data::ClusterProblemData)
+        
+    end
+
+    # --------------------------------------------------------------
+    # Primal Search Heuristic for the Homogeneous Clustering Problem
+    # --------------------------------------------------------------
+    # Parameters:
+    # x: Matrix of cluster assignments
+    # --------------------------------------------------------------
+    # Return: Primal solution for the Homogeneous Clustering Problem
+    # --------------------------------------------------------------
+    function primal_search(x::Matrix, u::AbstractVector, data::ClusterProblemData)
+        distance_matrix = data.d
+        n_points = data.n_points
+        m = data.n_clusters
+
+        diag_x = [x[i,i] for i in 1:n_points]
+        clusters = findall(y -> y == 1, diag_x)
+
+        curr_solution = _build_solution_from_clusters(clusters, data)
+        
+        opt_value = sum(distance_matrix.*curr_solution)
+
+        k = 1
+        while k < m
+            new_clusters =  sample(1:n_points, Weights([i ∉ clusters ? 1 : 0 for i in 1:n_points]), k, replace=false)
+            old_clusters = sample(1:m, k, replace=false)
+
+            temp_clusters = copy(clusters)
+            temp_clusters[old_clusters] = new_clusters
+
+            intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
+            intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
+            if intermediate_opt_value < opt_value
+                clusters = temp_clusters
+                curr_solution = intermediate_solution
+                opt_value = intermediate_opt_value
+
+                k = 1
+            else
+                k += 1
+            end
+        end
+
+        # intercluster_distances = [i != j ? distance_matrix[i, j] : Inf64 for i in clusters, j in clusters]
+        # lowest_intercluster_distance = argmin(intercluster_distances)[1]
+
+        # for i in 1:n_points
+        #     if i ∉ clusters
+        #         temp_clusters = copy(clusters)
+        #         temp_clusters[lowest_intercluster_distance] = i
+        #         println(temp_clusters)
+
+        #         intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
+        #         intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
+
+        #         if intermediate_opt_value < opt_value
+        #             clusters = temp_clusters
+        #             curr_solution = intermediate_solution
+        #             opt_value = intermediate_opt_value
+        #         end
+        #     end
+        # end
+
+        return curr_solution, opt_value
     end
 
     # --------------------------------------------------------------
@@ -30,7 +122,6 @@ module HomogeneousCluster
     # --------------------------------------------------------------
     function lagrangian(u::AbstractVector, data::ClusterProblemData)::Tuple{Matrix, Float64} 
         n_points = data.n_points
-        n_cluster_candidates = data.n_cluster_candidates
         d = data.d
         m = data.n_clusters
         
@@ -39,7 +130,7 @@ module HomogeneousCluster
         sum_penalized_distances = sum(min.(penalized_distances, 0), dims=1)
         m_lowest_distances = partialsortperm(vec(sum_penalized_distances), 1:m)
         
-        x = zeros(n_points, n_cluster_candidates)
+        x = zeros(n_points, n_points)
         for j in m_lowest_distances
             x[j, j] = 1
             
@@ -68,26 +159,34 @@ module HomogeneousCluster
     # --------------------------------------------------------------
     # Return: The solution found for the Lagragian Dual of the Homogeneous Clustering Problem
     # --------------------------------------------------------------
-    function subgradient_algorithm(initial_u::AbstractVector, data::ClusterProblemData, θ::Real, n_steps::Integer, lower_bound::Integer, ϵ::Real)
+    function subgradient_algorithm(initial_u::AbstractVector, data::ClusterProblemData, θ::Real, n_steps::Integer, lower_bound::Integer, ϵ::Real; stop_gap::Real = 0)
         u = initial_u
 
         prev_subgradient = zeros(size(u))
         results = []
+        x_feasible =  Matrix{Float64}(undef, 0, 0)
         for _ in 1:n_steps
             x, Zu = lagrangian(u, data)
             
-            push!(results, Zu)
             constraint_values = vec(1 .- sum(x, dims = 2))
             subgradient = constraint_values + θ .* prev_subgradient
             
             step_size = ϵ * (lower_bound - Zu) / sum(subgradient.^2)
 
-            u = u + step_size .* subgradient
+            x_feasible, Z = primal_search(x, u, data)
+
+            u = max.(u + step_size .* subgradient, 0)
+
+            if abs(Z - Zu) <= stop_gap
+                break
+            end
 
             prev_subgradient = subgradient
+            
+            push!(results, (Z, Zu))
         end
 
-        return u, results
+        return x_feasible, results
     end
 
     # --------------------------------------------------------------
@@ -119,7 +218,7 @@ module HomogeneousCluster
             
             step_size = μ*ρ^k
 
-            u = u + step_size .* subgradient
+            u = max.(u + step_size .* subgradient, 0)
 
             prev_subgradient = subgradient
         end
@@ -135,24 +234,19 @@ module HomogeneousCluster
     # --------------------------------------------------------------
     # Return: The Jump formulation for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
-    function jump_formulation(data::ClusterProblemData, u)
+    function jump_formulation(data::ClusterProblemData)
         n = data.n_points
         m = data.n_clusters
-        n_cluster_candidates = data.n_cluster_candidates
         d = data.d
 
-        model = Model(Gurobi.Optimizer)
-        set_optimizer_attribute(model, "OutputFlag", 0)
-        set_optimizer_attribute(model, "TimeLimit", 100)
-        set_optimizer_attribute(model, "MIPGap", 0.001)
-        set_optimizer_attribute(model, "Threads", min(length(Sys.cpu_info()),16))
+        model = Model(HiGHS.Optimizer)
 
-        @variable(model, x[1:n, 1:n_cluster_candidates], Bin)
+        @variable(model, x[1:n, 1:n], Bin)
 
         @constraint(model, sum(x, dims = 2) .== 1)
-        @constraint(model, sum([x[i,i] for i in 1:n_cluster_candidates]) == m)
+        @constraint(model, sum([x[i,i] for i in 1:n]) == m)
 
-        @constraint(model, [j = 1:n_cluster_candidates], x[:,j] .<= x[j,j])
+        @constraint(model, [j = 1:n], x[:,j] .<= x[j,j])
 
         @objective(model, Min, sum(d.*x))
         return model
