@@ -1,5 +1,5 @@
 module HomogeneousCluster
-    using JuMP, HiGHS, StatsBase
+    using JuMP, Gurobi, StatsBase, Clustering
     # --------------------------------------------------------------
     # Definition of the Data for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
@@ -54,7 +54,7 @@ module HomogeneousCluster
     # --------------------------------------------------------------
     # Return: Primal solution for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
-    function primal_search(x::Matrix, u::AbstractVector, data::ClusterProblemData)
+    function primal_search(x::Matrix, data::ClusterProblemData)
         distance_matrix = data.d
         n_points = data.n_points
         m = data.n_clusters
@@ -66,47 +66,50 @@ module HomogeneousCluster
         
         opt_value = sum(distance_matrix.*curr_solution)
 
-        k = 1
-        while k < m
-            new_clusters =  sample(1:n_points, Weights([i ∉ clusters ? 1 : 0 for i in 1:n_points]), k, replace=false)
-            old_clusters = sample(1:m, k, replace=false)
+        # k = 1
+        # while k < m
+        #     new_clusters =  sample(1:n_points, Weights([i ∉ clusters ? 1 : 0 for i in 1:n_points]), k, replace=false)
+        #     old_clusters = sample(1:m, k, replace=false)
 
-            temp_clusters = copy(clusters)
-            temp_clusters[old_clusters] = new_clusters
+        #     temp_clusters = copy(clusters)
+        #     temp_clusters[old_clusters] = new_clusters
 
-            intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
-            intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
-            if intermediate_opt_value < opt_value
-                clusters = temp_clusters
-                curr_solution = intermediate_solution
-                opt_value = intermediate_opt_value
+        #     intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
+        #     intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
+        #     if intermediate_opt_value < opt_value
+        #         clusters = temp_clusters
+        #         curr_solution = intermediate_solution
+        #         opt_value = intermediate_opt_value
 
-                k = 1
-            else
-                k += 1
-            end
-        end
-
-        # intercluster_distances = [i != j ? distance_matrix[i, j] : Inf64 for i in clusters, j in clusters]
-        # lowest_intercluster_distance = argmin(intercluster_distances)[1]
-
-        # for i in 1:n_points
-        #     if i ∉ clusters
-        #         temp_clusters = copy(clusters)
-        #         temp_clusters[lowest_intercluster_distance] = i
-        #         println(temp_clusters)
-
-        #         intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
-        #         intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
-
-        #         if intermediate_opt_value < opt_value
-        #             clusters = temp_clusters
-        #             curr_solution = intermediate_solution
-        #             opt_value = intermediate_opt_value
-        #         end
+        #         k = 1
+        #     else
+        #         k += 1
         #     end
         # end
 
+        intercluster_distances = [i != j ? distance_matrix[i, j] : Inf64 for i in clusters, j in clusters]
+        lowest_intercluster_distance = argmin(intercluster_distances)[1]
+
+        for i in 1:n_points
+            if i ∉ clusters
+                temp_clusters = copy(clusters)
+                temp_clusters[lowest_intercluster_distance] = i
+
+                intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
+                intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
+
+                if intermediate_opt_value < opt_value
+                    clusters = temp_clusters
+                    curr_solution = intermediate_solution
+                    opt_value = intermediate_opt_value
+                end
+            end
+        end
+
+        # k_medoids_result = kmedoids(distance_matrix, m; init=clusters)
+        # clusters, opt_value = (k_medoids_result.medoids, k_medoids_result.totalcost)
+        # curr_solution = _build_solution_from_clusters(clusters, data)
+        
         return curr_solution, opt_value
     end
 
@@ -164,7 +167,8 @@ module HomogeneousCluster
 
         prev_subgradient = zeros(size(u))
         results = []
-        x_feasible =  Matrix{Float64}(undef, 0, 0)
+        best_x =  Matrix{Float64}(undef, 0, 0)
+        best_solution = Inf64
         for _ in 1:n_steps
             x, Zu = lagrangian(u, data)
             
@@ -173,11 +177,16 @@ module HomogeneousCluster
             
             step_size = ϵ * (lower_bound - Zu) / sum(subgradient.^2)
 
-            x_feasible, Z = primal_search(x, u, data)
+            x_feasible, Z = primal_search(x, data)
 
             u = max.(u + step_size .* subgradient, 0)
 
-            if abs(Z - Zu) <= stop_gap
+            if Z < best_solution
+                best_x = x_feasible
+                best_solution = Z
+            end
+
+            if abs(Z - Zu)/Z <= stop_gap
                 break
             end
 
@@ -186,7 +195,7 @@ module HomogeneousCluster
             push!(results, (Z, Zu))
         end
 
-        return x_feasible, results
+        return best_x, results
     end
 
     # --------------------------------------------------------------
@@ -239,7 +248,11 @@ module HomogeneousCluster
         m = data.n_clusters
         d = data.d
 
-        model = Model(HiGHS.Optimizer)
+        model = Model(Gurobi.Optimizer)
+        set_optimizer_attribute(model, "OutputFlag", 0)
+        set_optimizer_attribute(model, "TimeLimit", 100)
+        set_optimizer_attribute(model, "MIPGap", 0.0001)
+        set_optimizer_attribute(model, "Threads", min(length(Sys.cpu_info()), 16))
 
         @variable(model, x[1:n, 1:n], Bin)
 
