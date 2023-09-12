@@ -1,5 +1,5 @@
 module HomogeneousCluster
-    using JuMP, Gurobi, StatsBase, Clustering
+    using JuMP, Gurobi
     # --------------------------------------------------------------
     # Definition of the Data for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
@@ -42,10 +42,6 @@ module HomogeneousCluster
         return solution
     end
 
-    function _local_search(clusters::AbstractVector, data::ClusterProblemData)
-        
-    end
-
     # --------------------------------------------------------------
     # Primal Search Heuristic for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
@@ -54,7 +50,7 @@ module HomogeneousCluster
     # --------------------------------------------------------------
     # Return: Primal solution for the Homogeneous Clustering Problem
     # --------------------------------------------------------------
-    function primal_search(x::Matrix, data::ClusterProblemData)
+    function primal_search(x::Matrix, u::AbstractVector, data::ClusterProblemData)
         distance_matrix = data.d
         n_points = data.n_points
         m = data.n_clusters
@@ -66,31 +62,14 @@ module HomogeneousCluster
         
         opt_value = sum(distance_matrix.*curr_solution)
 
-        # k = 1
-        # while k < m
-        #     new_clusters =  sample(1:n_points, Weights([i ∉ clusters ? 1 : 0 for i in 1:n_points]), k, replace=false)
-        #     old_clusters = sample(1:m, k, replace=false)
-
-        #     temp_clusters = copy(clusters)
-        #     temp_clusters[old_clusters] = new_clusters
-
-        #     intermediate_solution = _build_solution_from_clusters(temp_clusters, data)
-        #     intermediate_opt_value = sum(distance_matrix.*intermediate_solution)
-        #     if intermediate_opt_value < opt_value
-        #         clusters = temp_clusters
-        #         curr_solution = intermediate_solution
-        #         opt_value = intermediate_opt_value
-
-        #         k = 1
-        #     else
-        #         k += 1
-        #     end
-        # end
-
         intercluster_distances = [i != j ? distance_matrix[i, j] : Inf64 for i in clusters, j in clusters]
         lowest_intercluster_distance = argmin(intercluster_distances)[1]
 
-        for i in 1:n_points
+        penalized_distances = distance_matrix .- u
+        sum_penalized_distances = sum(min.(penalized_distances, 0), dims=1)
+        lowest_distances = partialsortperm(vec(sum_penalized_distances), 1:2*m)
+
+        for i in lowest_distances
             if i ∉ clusters
                 temp_clusters = copy(clusters)
                 temp_clusters[lowest_intercluster_distance] = i
@@ -106,10 +85,6 @@ module HomogeneousCluster
             end
         end
 
-        # k_medoids_result = kmedoids(distance_matrix, m; init=clusters)
-        # clusters, opt_value = (k_medoids_result.medoids, k_medoids_result.totalcost)
-        # curr_solution = _build_solution_from_clusters(clusters, data)
-        
         return curr_solution, opt_value
     end
 
@@ -169,6 +144,7 @@ module HomogeneousCluster
         results = []
         best_x =  Matrix{Float64}(undef, 0, 0)
         best_solution = Inf64
+        best_dual = -Inf64
         for _ in 1:n_steps
             x, Zu = lagrangian(u, data)
             
@@ -177,16 +153,20 @@ module HomogeneousCluster
             
             step_size = ϵ * (lower_bound - Zu) / sum(subgradient.^2)
 
-            x_feasible, Z = primal_search(x, data)
+            x_feasible, Z = primal_search(x, u, data)
 
-            u = max.(u + step_size .* subgradient, 0)
+            u = u + step_size .* subgradient
 
             if Z < best_solution
                 best_x = x_feasible
                 best_solution = Z
             end
 
-            if abs(Z - Zu)/Z <= stop_gap
+            if Zu > best_dual
+                best_dual = Zu
+            end
+
+            if abs(best_solution - best_dual)/best_solution <= stop_gap
                 break
             end
 
@@ -196,43 +176,6 @@ module HomogeneousCluster
         end
 
         return best_x, results
-    end
-
-    # --------------------------------------------------------------
-    # Subgradient Optimization of the Lagrange multipliers
-    # using step_size: μ_k = μ_0 * ρ^k
-    # -------------------------------------------------------------- 
-    # Parameters:
-    # inital_u: Initial Vector of Lagrange multipliers
-    # d: Vector of distances between all data points
-    # m: Number of clusters
-    # θ: Smoothing parameter for the step
-    # n_steps: Number of steps to perform
-    # μ: μ parameter for the step size calculation
-    # ρ: ρ parameter for the step size calculation
-    # --------------------------------------------------------------
-    # Return: The solution found for the Lagragian Dual of the Homogeneous Clustering Problem
-    # --------------------------------------------------------------lower_bound
-    function subgradient_algorithm(initial_u::AbstractVector, data::ClusterProblemData, θ::Real, n_steps::Integer, μ::Real, ρ::Real)
-        u = initial_u
-
-        prev_subgradient = zeros(size(u))
-        results = []
-        for k in 1:n_steps
-            x, Zu = lagrangian(u, data)
-            
-            push!(results, Zu)
-            constraint_values = vec(1 .- sum(x, dims = 2))
-            subgradient = constraint_values + θ .* prev_subgradient
-            
-            step_size = μ*ρ^k
-
-            u = max.(u + step_size .* subgradient, 0)
-
-            prev_subgradient = subgradient
-        end
-
-        return u, results
     end
 
     # --------------------------------------------------------------
