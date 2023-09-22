@@ -7,7 +7,7 @@ Developed by Ronald Albert.
 <h2 align="center">
 The project
 </h2>
-This work was developed for the Combinatorial Optimization course, taught by Professor Abílio Lucena in 2023/P2 for the Computer Systems Engineering Program (PESC). In this work, Lagrangian relaxation will be applied to the analysis of clustering in the specific context of the k-medoids problem. More specifically, by usage of the subgradient method upper and lower bounds are gradually generated for bounding the objective function, with the hope that suchbounds eventually converge to the optimal value of the objective function.
+This work was developed for the Combinatorial Optimization course, taught by Professor Abílio Lucena in 2023/P2 for the Computer Systems Engineering Program (PESC). In this work, Lagrangian relaxation will be applied to the analysis of clustering in the specific context of the k-medoids problem. More specifically, by usage of the subgradient method upper and lower bounds are gradually generated for bounding the objective function, with the hope that such bounds eventually converge to the optimal value of the objective function.
 
 It's entirely implemented in Julia, and all the results are available in the folder `results`.
 
