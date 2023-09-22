@@ -1,5 +1,5 @@
 <h1 align="center">
-<br> The $k$-Medoids Problem through Lagrangian Duality lens
+<br> The k-Medoids Problem through Lagrangian Duality lens
 </h1>
 Repository for the course on Combinatorial Optimization at  <a href="https://www.cos.ufrj.br/" > PESC - Systems Engineering and Computer Science Program</a> from <a href="https://ufrj.br/" >UFRJ - Federal University of Rio de Janeiro</a>, taught by <a href="https://www.cos.ufrj.br/index.php/pt-BR/pessoas/details/18/2201-abiliolucena">Prof.  Abilio Pereira de Lucena Filho</a>.
 
